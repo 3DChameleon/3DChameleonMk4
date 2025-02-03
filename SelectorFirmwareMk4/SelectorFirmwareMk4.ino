@@ -44,7 +44,11 @@ It also assumes the servo is 180degress, otherwise adjust line 52 and look at li
 #include <SparkFunSX1509.h> // sparkfun i/o expansion board - used for additional filament sensors as well as communications with secondary boards
 #include <Wire.h>
 #include <SPI.h>
+#ifdef ARDUINO_ARCH_ESP32
+#include <ESP32Servo.h>
+#else
 #include <Servo.h>
+#endif
 
 #define SCREEN_WIDTH 128 // OLED display width, in pixels
 #define SCREEN_HEIGHT 64 // OLED display height, in pixels
@@ -206,10 +210,16 @@ SX1509 io;                        // Create an SX1509 object to be used througho
 #define filament A1          // pcb labelled Hold
 #define filamentCutterPin 11 // pcb labelled Z+/- endstop
 
+
+
+
+#else
+#error "UNSUPPORTED BOARD - Add your board definition above this!"
+
 #endif
 
 // This defines servo sweep start and end values, scaled to servo max angle,
-// and attempts to use step direction (later on line 841 + 857).
+// and attempts to use step direction (later on line 841 + 857). Was 136-180.
 // Change these values if desired, but probably not necessary unless reversed servo
 #define SERVO_START_ANGLE_AS_180_SERVO 136 / (180 / SERVO_MAX_ANGLE)
 #define SERVO_END_ANGLE_AS_180_SERVO 180 / (180 / SERVO_MAX_ANGLE)
