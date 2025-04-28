@@ -29,7 +29,14 @@ Single Button Press Commands (count pulses of selector)
 #7 - Home
 #8 - Next Filament
 #9 - Random Filament
- 
+
+Go and edit the top sections of this file to change options and to match your hardware configuration.
+There is a section for the screen and/or serial output, along with servo maximum angle on lines 49-52.  
+The default pin assignment is for the 3D Chameleon Mk4.1 board, toggled on line 143.
+If you are using a different board, you will need to change the pin assignments to match your board.
+There are some defaults provided, but the various CNC shield clones have different issues + pinouts.
+The AutoClippy is setup on pin 11, if you have a different processor then adjust filamentCutterPin.
+It also assumes the servo is 180degress, otherwise adjust line 52 and look at lines 211-220, then test!
 */
 
 #include <SSD1306Ascii.h> //i2C OLED
@@ -37,11 +44,16 @@ Single Button Press Commands (count pulses of selector)
 #include <SparkFunSX1509.h> // sparkfun i/o expansion board - used for additional filament sensors as well as communications with secondary boards
 #include <Wire.h>
 #include <SPI.h>
+#ifdef ARDUINO_ARCH_ESP32
+#include <ESP32Servo.h>
+#else
 #include <Servo.h>
+#endif
 
 #define SCREEN_WIDTH 128 // OLED display width, in pixels
 #define SCREEN_HEIGHT 64 // OLED display height, in pixels
-
+#define USE_SERIAL 0 // 0 = no serial output, 1 = serial output
+#define SERVO_MAX_ANGLE 180
 /**
  * Made with Marlin Bitmap Converter
  * https://marlinfw.org/tools/u8glib/converter.html
@@ -132,8 +144,11 @@ const byte SX1509_ADDRESS = 0x3E; // SX1509 I2C address
 #define SX1509_OUTPUT 4
 SX1509 io;                        // Create an SX1509 object to be used throughout
 
-
+// This "#if 1" means setup pins for the 3d Chameleon PCB (official)
+// If you want to use a CNC Shield, change to "#if 0" and check below
+#if 1
 // defines pins numbers - 3D Chameleon Board
+
 #define extEnable 0
 #define extStep 1
 #define extDir 2
@@ -145,6 +160,74 @@ SX1509 io;                        // Create an SX1509 object to be used througho
 #define trigger A3
 #define s_limit A4
 #define filament A5
+#define filamentCutterPin 11
+
+
+#elif defined(ARDUINO_AVR_UNO)
+// Arduino Uno -- CNC Shield V3 - double-check your board's pinout
+// A4988 in base X (ext) 
+// A4988 in base Y (sel) 
+// X.STEP /DR (ext)
+// Y.STEP /DR (sel)
+// END STOPS Z+ (clippy)
+// CoolEn (trigger)
+// Resume (s_limit)
+// Hold (filament)
+// Alternate settings: (shared with screen, but can be used)
+// DA (s_limit) is A4
+// CL (filament) is A5
+
+#define extEnable 8
+#define extStep 2
+#define extDir 5
+
+#define selEnable 8
+#define selStep 3
+#define selDir 6
+
+#define trigger A3
+// #define s_limit A4        // pcb labelled DA
+// #define filament A5       // pcb labelled CL
+#define s_limit A2           // pcb labelled Resume
+#define filament A1          // pcb labelled Hold
+#define filamentCutterPin 11
+
+
+#elif defined(ARDUINO_AVR_NANO)
+// Nano CNC Shield (aka CNC Shield V4), HW-702 v0.0.0 - ensure follow guide below to correct microstepping pcb traces if needed!
+// see https://www.instructables.com/Fix-Cloned-Arduino-NANO-CNC-Shield/#:~:text=Lines%2047%2C48%20%26%2049-,need%20replacing%20with,-%3A
+
+#define extEnable 8
+#define extStep 5
+#define extDir 2
+
+#define selEnable 8
+#define selStep 6
+#define selDir 3
+
+#define trigger A3           // pcb labelled Coolant ENable
+#define s_limit A2           // pcb labelled Resume
+#define filament A1          // pcb labelled Hold
+#define filamentCutterPin 11 // pcb labelled Z+/- endstop
+
+
+
+
+#else
+#error "UNSUPPORTED BOARD - Add your board definition above this!"
+
+#endif
+
+// This defines servo sweep start and end values, scaled to servo max angle,
+// and attempts to use step direction (later on line 841 + 857). Was 136-180.
+// Change these values if desired, but probably not necessary unless reversed servo
+#define SERVO_START_ANGLE_AS_180_SERVO 136 / (180 / SERVO_MAX_ANGLE)
+#define SERVO_END_ANGLE_AS_180_SERVO 180 / (180 / SERVO_MAX_ANGLE)
+#if SERVO_START_ANGLE_AS_180_SERVO > SERVO_END_ANGLE_AS_180_SERVO
+  #define SERVO_STEP -1
+#else
+  #define SERVO_STEP 1
+#endif
 
 const int counterclockwise = HIGH;
 const int clockwise = !counterclockwise;
@@ -196,6 +279,11 @@ long randomNumber = 0;
 
 void setup()
 {
+  if (USE_SERIAL) {
+    Serial.begin(115200);
+    delay(500);
+    Serial.println("Serial Enabled");
+  }
 
   Wire.begin(); //start i2C  
 	Wire.setClock(400000L); //set clock
@@ -209,6 +297,10 @@ void setup()
     io.pinMode(SX1509_FILAMENT_3, INPUT_PULLUP);
     io.pinMode(SX1509_OUTPUT, OUTPUT);
     ioEnabled = true;
+  }
+  if (USE_SERIAL) {
+    Serial.print("IO Expander: ");
+    Serial.println(ioEnabled);
   }
 
   // enable OLED display
@@ -273,6 +365,9 @@ void loop()
   // process button press
   if (digitalRead(trigger) == 0)
   {
+    if (USE_SERIAL) {
+      Serial.println("Button Depressed");
+    }
     idleCount = 0;
     logoActive = false;
     unsigned long nextPulse;
@@ -289,6 +384,9 @@ void loop()
         if(pulseCount>1) vibrateMotor();
       }
       delay(400);  // each pulse is 400+ milliseconds apart 
+    }
+    if (USE_SERIAL) {
+      Serial.println("Button Released");
     }
     processCommand(pulseCount); // ok... execute whatever command was caught (by pulse count)
     pulseCount = 0;
@@ -479,7 +577,11 @@ void processCommand(long commandCount)
 // just the routine to update the OLED
 void displayText(int offset, String str)
 {
-
+  if (USE_SERIAL) {
+    Serial.print(offset);
+    Serial.print(": ");
+    Serial.println(str);
+  } 
   //if(displayEnabled){
     oled.clear();
     oled.println("");
@@ -734,7 +836,7 @@ void cutFilament() {
 // enable the servo
 void connectGillotine()
 {
-  filamentCutter.attach(11);
+  filamentCutter.attach(filamentCutterPin);
 }
 
 // disable the servo - so it doesn't chatter when not in use
@@ -746,7 +848,11 @@ void disconnectGillotine()
 // cycle servo from 135 and 180
 void openGillotine()
 {
-    for (int pos = 135; pos <= 180; pos += 1) { // goes from 0 degrees to 180 degrees
+  #if SERVO_STEP <= -1
+    for (int pos = SERVO_START_ANGLE_AS_180_SERVO; pos >= SERVO_END_ANGLE_AS_180_SERVO; pos += SERVO_STEP) {
+  #else
+    for (int pos = SERVO_START_ANGLE_AS_180_SERVO; pos <= SERVO_END_ANGLE_AS_180_SERVO; pos += SERVO_STEP) { // goes from 0 degrees to 180 degrees
+  #endif
     // in steps of 1 degree
     filamentCutter.write(pos);              // tell servo to go to position in variable 'pos'
     delayMicroseconds(25000);                       // waits 15ms for the servo to reach the position
@@ -758,7 +864,11 @@ void openGillotine()
 // reverse cycle servo from 180 back to 135
 void closeGillotine()
 {
-  for (int pos = 180; pos >= 135; pos -= 1) { // goes from 180 degrees to 0 degrees
+#if SERVO_STEP <= -1
+  for (int pos = SERVO_END_ANGLE_AS_180_SERVO; pos <= SERVO_START_ANGLE_AS_180_SERVO; pos -= SERVO_STEP) {
+#else
+  for (int pos = SERVO_END_ANGLE_AS_180_SERVO; pos >= SERVO_START_ANGLE_AS_180_SERVO; pos -= SERVO_STEP) { // goes from 180 degrees to 0 degrees
+#endif
     filamentCutter.write(pos);              // tell servo to go to position in variable 'pos'
     delayMicroseconds(25000);                       // waits 15ms for the servo to reach the position
   }
@@ -786,4 +896,3 @@ void vibrateMotor()
   rotateSelector(clockwise, 2 * 16);
   rotateSelector(!clockwise, 2 * 16);
 }
-
